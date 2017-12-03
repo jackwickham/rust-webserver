@@ -1,4 +1,3 @@
-//! # request
 //! [RFC 7230](https://tools.ietf.org/html/rfc723) compliant HTTP 1.1 request parser
 
 mod util;
@@ -10,6 +9,7 @@ use std::sync::Arc;
 
 use self::util::*;
 pub use self::util::ParseError;
+use self::util::TokenType::{TChar, Invalid};
 
 /// A container for the details of an HTTP request
 #[derive(Debug, Eq, PartialEq)]
@@ -61,6 +61,7 @@ impl Request {
         let mut it = StreamReader::from(stream);
 
         Request::parse_request_line(&mut builder, &mut it)?;
+        Request::parse_headers(&mut builder, &mut it)?;
 
         Ok(builder.into_request().unwrap())
     }
@@ -95,9 +96,9 @@ impl Request {
         // Read bytes
         for b in it {
             match TokenType::from(b) {
-                TokenType::TChar(c) => method.push(c),
-                TokenType::Invalid(b' ') => return Ok(Method::from(method)),
-                TokenType::Invalid(_) => return Err(
+                TChar(c) => method.push(c),
+                Invalid(b' ') => return Ok(Method::from(method)),
+                Invalid(_) => return Err(
                     ParseError::new("Unexpected character when parsing request method", 400)
                 ),
             }
@@ -114,13 +115,14 @@ impl Request {
         let mut target = Vec::new();
         // Read bytes
         for b in it {
-            match TokenType::from(b) {
-                TokenType::TChar(c) => target.push(c),
-                TokenType::Invalid(b' ') => return match String::from_utf8(target) {
+            match b {
+                // Allowed characters in URLs per [RFC 3986](https://tools.ietf.org/html/rfc3986#appendix-A)
+                b'!' | b'#'...b';' | b'=' | b'?'...b'[' | b']'...b'z' | b'|' | b'~' => target.push(b),
+                b' ' => return match String::from_utf8(target) {
                     Ok(s) => Ok(s),
                     Err(e) => Err(ParseError::from("Invalid unicode when parsing request target", 400, Box::from(e))),
                 },
-                TokenType::Invalid(_) => return Err(
+                _ => return Err(
                     ParseError::new("Unexpected character when parsing request target", 400)
                 ),
             }
@@ -133,43 +135,153 @@ impl Request {
     /// [RFC 7230 §2.6](https://tools.ietf.org/html/rfc7230#section-2.6).
     fn parse_request_version<T>(it: &mut StreamReader<T>) -> Result<(u8, u8), ParseError>
         where T: Read {
+
+        let eof_err = "Unexpected end of stream when parsing request version";
+        let unexpected_chr_error = "Unexpected character when parsing request version";
         let expected_it = "HTTP/".bytes();
+
         for expected in expected_it {
             match it.next() {
                 Some(b) if b == expected => (),
-                Some(_) => return Err(ParseError::new("Unexpected character when parsing request version", 400)),
-                None => return Err(ParseError::new("Unexpected end of stream when parsing request version", 400)),
+                Some(_) => return Err(ParseError::new(unexpected_chr_error, 400)),
+                None => return Err(ParseError::new(eof_err, 400)),
             }
         }
         let major = match it.next() {
             Some(n) if n >= 48 && n <= 57 => n - 48,
-            Some(_) => return Err(ParseError::new("Unexpected character when parsing request version", 400)),
-            None => return Err(ParseError::new("Unexpected end of stream when parsing request version", 400)),
+            Some(_) => return Err(ParseError::new(unexpected_chr_error, 400)),
+            None => return Err(ParseError::new(eof_err, 400)),
         };
         match it.next() {
             Some(b'.') => (),
-            Some(_) => return Err(ParseError::new("Unexpected character when parsing request version", 400)),
-            None => return Err(ParseError::new("Unexpected end of stream when parsing request version", 400)),
+            Some(_) => return Err(ParseError::new(unexpected_chr_error, 400)),
+            None => return Err(ParseError::new(eof_err, 400)),
         }
         let minor = match it.next() {
             Some(n) if n >= 48 && n <= 57 => n - 48,
-            Some(_) => return Err(ParseError::new("Unexpected character when parsing request version", 400)),
-            None => return Err(ParseError::new("Unexpected end of stream when parsing request version", 400)),
+            Some(_) => return Err(ParseError::new(unexpected_chr_error, 400)),
+            None => return Err(ParseError::new(eof_err, 400)),
         };
         
         // Should now be at the end of the Request Line
         match it.next() {
             Some(b'\r') => (),
-            Some(_) => return Err(ParseError::new("Unexpected character when parsing request version", 400)),
-            None => return Err(ParseError::new("Unexpected end of stream when parsing request version", 400)),
+            Some(_) => return Err(ParseError::new(unexpected_chr_error, 400)),
+            None => return Err(ParseError::new(eof_err, 400)),
         }
         match it.next() {
             Some(b'\n') => (),
-            Some(_) => return Err(ParseError::new("Unexpected character when parsing request version", 400)),
-            None => return Err(ParseError::new("Unexpected end of stream when parsing request version", 400)),
+            Some(_) => return Err(ParseError::new(unexpected_chr_error, 400)),
+            None => return Err(ParseError::new(eof_err, 400)),
         }
 
         Ok((major, minor))
+    }
+
+    /// Parse the request headers from `it` into `builder`, as specified in
+    /// [RFC 7230 §3.2](https://tools.ietf.org/html/rfc7230#section-3.2)
+    fn parse_headers<T: Read>(builder: &mut RequestBuilder, it: &mut StreamReader<T>) -> Result<(), ParseError> {
+        let eof_err = "Unexpected end of stream when parsing request headers";
+        let unexpected_chr_error = "Unexpected character when parsing request headers";
+
+        // An enum to store the current state of the parser
+        enum ParserState {
+            // After a new line, ready to parse the header name
+            Start,
+            // Currently parsing the header name
+            Name {name: Vec<u8>},
+            // Currently parsing the whitespace after the : but before the value
+            ValueLeadingWS {name: String},
+            // Currently parsing the value
+            Value {name: String, value: Vec<u8>},
+            // Currently parsing the new line (CR (here) LF)
+            NewLine,
+            // Currently parsing the final new line (CR LF CR (here) LF)
+            FinalNewLine,
+        };
+        let mut state = ParserState::Start;
+
+        'outer: loop {
+            let b = match it.next() {
+                None => return Err(ParseError::new(eof_err, 400)),
+                Some(b) => b,
+            };
+
+            // Wrap this in a loop so that we can cheaply transition to a different state without having consumed
+            // any characters
+            loop {
+                match state {
+                    ParserState::Start => match b {
+                        b'\r' => state = ParserState::FinalNewLine,
+                        _ => {
+                            // Move straight into Name without consuming this character
+                            state = ParserState::Name {
+                                name: Vec::new()
+                            };
+                            continue;
+                        }
+                    },
+                    ParserState::Name {name: mut n} => match TokenType::from(b) {
+                        TChar(c) => {
+                            n.push(c);
+                            state = ParserState::Name {name: n}
+                        },
+                        Invalid(b':') => {
+                            // Safe to convert to UTF-8 because it was constructed from just ASCII characters
+                            let name = String::from_utf8(n).unwrap();
+                            state = ParserState::ValueLeadingWS {name: name};
+                        },
+                        Invalid(_) => return Err(ParseError::new(unexpected_chr_error, 400)),
+                    },
+                    ParserState::ValueLeadingWS {name: n} => match b {
+                        b' ' | b'\t' => state = ParserState::ValueLeadingWS {name: n},
+                        _ => {
+                            // Move straight into Value without consuming
+                            state = ParserState::Value {
+                                name: n,
+                                value: Vec::new()
+                            };
+                            continue;
+                        }
+                    },
+                    ParserState::Value {name: n, value: mut v} => match b {
+                        b'\t' | b' '...b'~' => {
+                            v.push(b);
+                            state = ParserState::Value {name: n, value: v};
+                        },
+                        0x80...0xFF => {
+                            // The specification says that headers containing these characters SHOULD be considered as
+                            // opaque data. However, doing that means we can't treat the headers as strings, because
+                            // this would break UTF-8 compliance, thereby vastly increasing the complexity of the rest
+                            // of the code. The non-ASCII characters will therefore be silently discarded
+                            state = ParserState::Value {name: n, value: v};
+                        }
+                        b'\r' => {
+                            // Because we discarded the invalid characters, it's safe to convert to UTF-8
+                            let value = String::from_utf8(v).unwrap();
+                            // Store the header
+                            builder.add_header(n, value);
+                            // Transition to expect the LF
+                            state = ParserState::NewLine;
+                        },
+                        _ => return Err(ParseError::new(unexpected_chr_error, 400)),
+                    },
+                    ParserState::NewLine => match b {
+                        b'\n' => state = ParserState::Start,
+                        _ => return Err(ParseError::new(unexpected_chr_error, 400)),
+                    },
+                    ParserState::FinalNewLine => match b {
+                        b'\n' => break 'outer,
+                        _ => return Err(ParseError::new(unexpected_chr_error, 400)),
+                    }
+                }
+
+                // Consume the next character
+                break;
+            }
+        }
+
+        Ok(())
     }
 }
 

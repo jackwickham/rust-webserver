@@ -36,8 +36,8 @@ impl<'a, T: Read + 'a> StreamReader<'a, T> {
     /// Decrement the iterator, so the next call to `next` will return the previous value again. Returns `true` if the
     /// decrement was successful, and `false` if it failed.
     /// 
-    /// This method will succceed the first time it is called after `next`. Further invocations may succeed, depending
-    /// on the current state of the buffer.
+    /// This method will succceed the first time it is called after `next`, if that call to `next` returned `Some`.
+    /// Further invocations may succeed, depending on the current state of the buffer.
     /// 
     /// # Examples
     /// ```
@@ -104,7 +104,7 @@ impl ParseError {
     }
 
     /// Create a new ParseError from an existing error. It should be supplied with the description of the error, the
-    /// HTTP response code that should be sent to the client, and the original error taht caused this.
+    /// HTTP response code that should be sent to the client, and the original error that caused this.
     pub fn from(description: &'static str, http_response: u16, cause: Box<Error>) -> ParseError {
         ParseError {
             description,
