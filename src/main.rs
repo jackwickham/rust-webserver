@@ -21,7 +21,9 @@ fn handle_connection(mut stream: TcpStream) {
         Ok(d) => process_request(&mut stream, d),
         Err(e) => {
             println!("{}", e.description());
-            send_error(&mut stream, e.get_http_response());
+            if let Some(code) = e.http_response_code() {
+                send_error(&mut stream, code);
+            }
         }
     };
 
@@ -38,7 +40,7 @@ fn send_error(stream: &mut TcpStream, response_code: u16) {
 
 fn process_request(stream: &mut TcpStream, req: Request) {
     let headers = "HTTP/1.1 200 OK";
-    let mut body = format!("<h1>Success</h1><p>Requested {}</p><h2>Headers</h1>", req.get_target());
+    let mut body = format!("<h1>Success</h1><p>Requested {}</p><h2>Headers</h2>", req.get_target());
     for header in req.get_headers() {
         body = format!("{}<p><b>{}</b>: {}", body, header.0, header.1);
     }

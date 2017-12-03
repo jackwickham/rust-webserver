@@ -84,59 +84,67 @@ impl<'a, T: Read + 'a> Iterator for StreamReader<'a, T> {
 }
 
 
-/// An error that occurs when trying to parse a request.
+
+/// An error that occurred when trying to parse the request
 #[derive(Debug)]
-pub struct ParseError {
-    description: &'static str,
-    http_response: u16,
-    cause: Option<Box<Error>>,
+pub enum ParseError {
+    EOF,
+    IllegalCharacter,
+    Generic {err: Box<Error>, http_response: u16},
 }
 
 impl ParseError {
-    /// Create a new ParseError. It should be supplied with the description of the error and the HTTP response code
-    /// that should be sent to the client.
-    pub fn new(description: &'static str, http_response: u16) -> ParseError {
-        ParseError {
-            description,
+    /// Create a new generic error from anything that can be converted into an error (including &str).
+    ///
+    /// The HTTP response code that should be sent also needs to be provided
+    pub fn new_generic<E>(err: E, http_response: u16) -> ParseError
+        where E: Into<Box<Error>>
+    {
+        ParseError::Generic {
+            err: err.into(),
             http_response,
-            cause: None,
         }
     }
 
-    /// Create a new ParseError from an existing error. It should be supplied with the description of the error, the
-    /// HTTP response code that should be sent to the client, and the original error that caused this.
-    pub fn from(description: &'static str, http_response: u16, cause: Box<Error>) -> ParseError {
-        ParseError {
-            description,
-            http_response,
-            cause: Some(cause),
-        }
+    /// Create a new generic error from anything that can be converted into an error (including &str), and return error
+    /// 400 Bad Request to the client
+    pub fn new_bad_request<E>(err: E) -> ParseError
+        where E: Into<Box<Error>>
+    {
+        ParseError::new_generic(err, 400)
     }
 
-    /// Get the HTTP response code for this error
-    pub fn get_http_response(&self) -> u16 {
-        self.http_response
+    /// Get the HTTP response code that should be sent to the client.
+    /// 
+    /// Returns None if the connection should be closed with no response sent.
+    pub fn http_response_code(&self) -> Option<u16> {
+        match self {
+            &ParseError::EOF => None,
+            &ParseError::IllegalCharacter => Some(400),
+            &ParseError::Generic {http_response: r, ..} => Some(r),
+        }
     }
 }
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} (HTTP {})", self.description, self.http_response)
+        match self.http_response_code() {
+            Some(c) => write!(f, "{} (HTTP {})", self.description(), c),
+            None => write!(f, "{} (no response sent to client)", self.description()),
+        }
     }
 }
 
 impl Error for ParseError {
     fn description(&self) -> &str {
-        self.description
-    }
-
-    fn cause(&self) -> Option<&Error> {
-        match self.cause {
-            Some(ref cause) => Some(&**cause), // Convert &Box<Error> to &Error
-            None => None
+        match self {
+            &ParseError::EOF => "End of file reached while parsing headers",
+            &ParseError::IllegalCharacter => "Illegal character encountered while parsing headers",
+            &ParseError::Generic {ref err, ..} => err.description(),
         }
     }
 }
+
 
 /// A wrapper for parsing `token` as defined in [RFC 7230 Appendix B](https://tools.ietf.org/html/rfc7230#appendix-B).
 /// 
