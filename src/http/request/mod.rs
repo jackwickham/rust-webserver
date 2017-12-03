@@ -219,7 +219,7 @@ impl Method {
 unsafe impl Send for Method {}
 
 
-/// TODO: Docs
+/// A struct that can be used to incrementally build up a request, so the components are optional
 #[derive(Debug, Eq, PartialEq)]
 struct RequestBuilder {
     version: Option<(u8, u8)>,
@@ -230,6 +230,7 @@ struct RequestBuilder {
 }
 
 impl RequestBuilder {
+    /// Construct a new RequestBuilder
     pub fn new() -> RequestBuilder {
         RequestBuilder {
             version: None,
@@ -240,26 +241,32 @@ impl RequestBuilder {
         }
     }
 
+    /// Set the HTTP version of this request
     pub fn set_version(&mut self, major: u8, minor: u8) {
         self.version = Some((major, minor));
     }
 
+    /// Set the request method
     pub fn set_method(&mut self, method: Method) {
         self.method = Some(method);
     }
 
+    /// Set the request target
     pub fn set_target(&mut self, target: String) {
         self.target = Some(target);
     }
 
+    /// Set the body of the request
     pub fn set_body(&mut self, body: Vec<u8>) {
         self.body = Some(body);
     }
 
+    /// Add a header. This method currently stores the latest version in the event of duplicate headers.
     pub fn add_header(&mut self, key: String, val: String) {
         self.headers.insert(key, val);
     }
 
+    /// Convert this request builder into a full request
     pub fn into_request(self) -> Option<Request> {
         match self {
             RequestBuilder {

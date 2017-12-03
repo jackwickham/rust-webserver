@@ -84,6 +84,7 @@ impl<'a, T: Read + 'a> Iterator for StreamReader<'a, T> {
 }
 
 
+/// An error that occurs when trying to parse a request.
 #[derive(Debug)]
 pub struct ParseError {
     description: &'static str,
@@ -92,6 +93,8 @@ pub struct ParseError {
 }
 
 impl ParseError {
+    /// Create a new ParseError. It should be supplied with the description of the error and the HTTP response code
+    /// that should be sent to the client.
     pub fn new(description: &'static str, http_response: u16) -> ParseError {
         ParseError {
             description,
@@ -100,6 +103,8 @@ impl ParseError {
         }
     }
 
+    /// Create a new ParseError from an existing error. It should be supplied with the description of the error, the
+    /// HTTP response code that should be sent to the client, and the original error taht caused this.
     pub fn from(description: &'static str, http_response: u16, cause: Box<Error>) -> ParseError {
         ParseError {
             description,
@@ -108,6 +113,7 @@ impl ParseError {
         }
     }
 
+    /// Get the HTTP response code for this error
     pub fn get_http_response(&self) -> u16 {
         self.http_response
     }
