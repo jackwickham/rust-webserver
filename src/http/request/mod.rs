@@ -1,7 +1,7 @@
 //! # request
 //! [RFC 7230](https://tools.ietf.org/html/rfc723) compliant HTTP 1.1 request parser
 
-pub mod util;
+mod util;
 
 use std::io::prelude::*;
 use std::net::TcpStream;
@@ -93,18 +93,17 @@ impl Request {
         where T: Read {
         let mut method = Vec::new();
         // Read bytes
-        loop {
-            match it.next() {
-                Some(b' ') => break,
-                Some(13) | Some(10) =>  // new lines aren't allowed
-                    return Err(ParseError::new("Unexpected character when parsing request method", 400)),
-                Some(b) => method.push(b),
-                None => return Err(ParseError::new("Unexpected end of stream when parsing request method", 400)),
+        for b in it {
+            match TokenType::from(b) {
+                TokenType::TChar(c) => method.push(c),
+                TokenType::Invalid(b' ') => return Ok(Method::from(method)),
+                TokenType::Invalid(_) => return Err(
+                    ParseError::new("Unexpected character when parsing request method", 400)
+                ),
             }
         }
 
-        // Convert it to method type and store it
-        Ok(Method::from(method))
+        Err(ParseError::new("Unexpected end of stream when parsing request method", 400))
     }
 
     /// Parse the target (requested resource). The most general form is 1 or more visible characters (followed by a
@@ -114,24 +113,24 @@ impl Request {
         where T: Read {
         let mut target = Vec::new();
         // Read bytes
-        loop {
-            match it.next() {
-                Some(b' ') => break,
-                Some(13) | Some(10) =>  // new lines aren't allowed
-                    return Err(ParseError::new("Unexpected character when parsing request target", 400)),
-                Some(b) => target.push(b),
-                None => return Err(ParseError::new("Unexpected end of stream when parsing request target", 400)),
+        for b in it {
+            match TokenType::from(b) {
+                TokenType::TChar(c) => target.push(c),
+                TokenType::Invalid(b' ') => return match String::from_utf8(target) {
+                    Ok(s) => Ok(s),
+                    Err(e) => Err(ParseError::from("Invalid unicode when parsing request target", 400, Box::from(e))),
+                },
+                TokenType::Invalid(_) => return Err(
+                    ParseError::new("Unexpected character when parsing request target", 400)
+                ),
             }
         }
 
-        match String::from_utf8(target) {
-            Ok(s) => Ok(s),
-            Err(e) => Err(ParseError::from("Invalid unicode when parsing request target", 400, Box::from(e))),
-        }
+        Err(ParseError::new("Unexpected end of stream when parsing request target", 400))
     }
 
     /// Parse the HTTP version, which should be HTTP/maj.min, where maj and min are single digits, as defined in
-    // [RFC 7230 §2.6](https://tools.ietf.org/html/rfc7230#section-2.6).
+    /// [RFC 7230 §2.6](https://tools.ietf.org/html/rfc7230#section-2.6).
     fn parse_request_version<T>(it: &mut StreamReader<T>) -> Result<(u8, u8), ParseError>
         where T: Read {
         let expected_it = "HTTP/".bytes();

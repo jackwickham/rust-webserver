@@ -137,3 +137,27 @@ impl Error for ParseError {
         }
     }
 }
+
+/// A wrapper for parsing `token` as defined in [RFC 7230 Appendix B](https://tools.ietf.org/html/rfc7230#appendix-B).
+/// 
+/// Tokens are used in lots of places in the header, so this abstracts the parsing away. A valid token is a sequence of
+/// TChars.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum TokenType {
+    // tchar = "!" / "#" / "$" / "%" / "&" / "'" / "*" / "+" / "-" / "." / "^" / "_" / "`" / "|" / "~" / DIGIT / ALPHA
+    TChar(u8),
+    Invalid(u8),
+}
+
+impl TokenType {
+    pub fn from(c: u8) -> TokenType {
+        match c {
+            b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.' | b'^' | b'_' | b'`' | b'|' | b'~' |
+                b'0'...b'9' | b'a'...b'z' | b'A'...b'Z' => TokenType::TChar(c),
+            c => TokenType::Invalid(c),
+        }
+    }
+}
+
+unsafe impl Send for TokenType {}
+unsafe impl Sync for TokenType {}
