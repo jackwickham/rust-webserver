@@ -60,6 +60,13 @@ impl<'a, T: Read + 'a> StreamReader<'a, T> {
             None
         }
     }
+
+    /// Get the raw reader that this is wrapped around. This invalidates the cached data held by this struct.
+    pub fn get_inner(&mut self) -> &mut T {
+        self.read = 0;
+
+        &mut self.stream
+    }
 }
 
 impl<'a, T: Read + 'a> Iterator for StreamReader<'a, T> {
@@ -90,6 +97,8 @@ impl<'a, T: Read + 'a> Iterator for StreamReader<'a, T> {
 pub enum ParseError {
     EOF,
     IllegalCharacter,
+    MissingRequiredHeader (&'static str),
+    ServerError (Box<Error>),
     Generic {err: Box<Error>, http_response: u16},
 }
 
@@ -114,6 +123,13 @@ impl ParseError {
         ParseError::new_generic(err, 400)
     }
 
+    /// Create a new server error from an existing error, and return 500 Internal Server Error to the client
+    pub fn new_server_error<E>(err: E) -> ParseError
+        where E: Into<Box<Error>>
+    {
+        ParseError::ServerError(err.into())
+    }
+
     /// Get the HTTP response code that should be sent to the client.
     /// 
     /// Returns None if the connection should be closed with no response sent.
@@ -121,6 +137,8 @@ impl ParseError {
         match self {
             &ParseError::EOF => None,
             &ParseError::IllegalCharacter => Some(400),
+            &ParseError::MissingRequiredHeader (_) => Some(400),
+            &ParseError::ServerError(_) => Some(500),
             &ParseError::Generic {http_response: r, ..} => Some(r),
         }
     }
@@ -140,6 +158,8 @@ impl Error for ParseError {
         match self {
             &ParseError::EOF => "End of file reached while parsing headers",
             &ParseError::IllegalCharacter => "Illegal character encountered while parsing headers",
+            &ParseError::MissingRequiredHeader (_h) => "Missing required header",
+            &ParseError::ServerError(ref e) => e.description(),
             &ParseError::Generic {ref err, ..} => err.description(),
         }
     }

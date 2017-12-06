@@ -23,7 +23,7 @@ pub struct Request {
     /// The HTTP request headers
     headers: HashMap<String, String>,
     /// The request body
-    body: Option<Vec<u8>>,
+    body: Vec<u8>,
 }
 
 impl Request {
@@ -46,11 +46,8 @@ impl Request {
         &self.headers
     }
     /// Get the request body, if one was supplied in the request
-    pub fn get_body(&self) -> Option<&[u8]> {
-        match self.body {
-            Some(ref d) => Some(d),
-            None => None,
-        }
+    pub fn get_body(&self) -> &[u8] {
+        self.body.as_slice()
     }
 }
 
@@ -62,6 +59,11 @@ impl Request {
 
         Request::parse_request_line(&mut builder, &mut it)?;
         Request::parse_headers(&mut builder, &mut it)?;
+
+        // Sanity checks
+        
+
+        Request::parse_body(&mut builder, &mut it)?;
 
         Ok(builder.into_request().unwrap())
     }
@@ -271,6 +273,20 @@ impl Request {
 
         Ok(())
     }
+
+    fn parse_body<T: Read>(builder: &mut RequestBuilder, it: &mut StreamReader<T>) -> Result<(), ParseError> {
+        println!("Starting parse body");
+        // TODO: can't read to end
+        Ok(())/*
+        match it.get_inner().read_to_end(builder.get_body()) {
+            Ok(0) => Ok(()),
+            Ok(_) => {
+                println!("Body read complete");
+                Ok(())
+            },
+            Err(e) => Err(ParseError::new_server_error(e)),
+        }*/
+    }
 }
 
 unsafe impl Send for Request {}
@@ -325,7 +341,7 @@ struct RequestBuilder {
     method: Option<Method>,
     target: Option<String>,
     headers: HashMap<String, String>,
-    body: Option<Vec<u8>>,
+    body: Vec<u8>,
 }
 
 impl RequestBuilder {
@@ -336,7 +352,7 @@ impl RequestBuilder {
             method: None,
             target: None,
             headers: HashMap::new(),
-            body: None,
+            body: Vec::new(),
         }
     }
 
@@ -356,13 +372,17 @@ impl RequestBuilder {
     }
 
     /// Set the body of the request
-    pub fn set_body(&mut self, body: Vec<u8>) {
-        self.body = Some(body);
+    pub fn get_body(&mut self) -> &mut Vec<u8> {
+        &mut self.body
     }
 
     /// Add a header. This method currently stores the latest version in the event of duplicate headers.
     pub fn add_header(&mut self, key: String, val: String) {
         self.headers.insert(key, val);
+    }
+
+    pub fn get_headers(&self) -> &HashMap<String, String> {
+        &self.headers
     }
 
     /// Convert this request builder into a full request
@@ -403,7 +423,7 @@ mod tests {
             method: Some(Method::Get),
             target: Some(String::from("/test/path?k=v&k2")),
             headers: HashMap::new(),
-            body: None,
+            body: vec![],
         });
     }
 
